@@ -274,7 +274,7 @@ export default function AgentDeploymentChat() {
     }));
 
     try {
-      const API_ENDPOINT = 'https://your-api-gateway-url.execute-api.us-east-1.amazonaws.com/prod';
+      const API_ENDPOINT = 'https://9xg8ogdbd7.execute-api.us-east-1.amazonaws.com/prod';
 
       const response = await fetch(`${API_ENDPOINT}/approve-deployment`, {
         method: 'POST',
