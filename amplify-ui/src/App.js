@@ -112,7 +112,7 @@ export default function AgentDeploymentChat() {
 
     try {
       // Call your API Gateway endpoint
-      const API_ENDPOINT = 'https://9xg8ogdbd7.execute-api.us-east-1.amazonaws.com/UAT';
+      const API_ENDPOINT = 'https://9xg8ogdbd7.execute-api.us-east-1.amazonaws.com/prod';
 
       const response = await fetch(`${API_ENDPOINT}/invoke-agent`, {
         method: 'POST',
