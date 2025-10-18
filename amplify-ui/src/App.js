@@ -101,7 +101,8 @@ export default function AgentDeploymentChat() {
         stages: deploymentStages,
         logs: [],
         status: 'in-progress',
-        cost: null
+        cost: null,
+        sessionId: null
       }
     };
 
@@ -109,30 +110,126 @@ export default function AgentDeploymentChat() {
       c.id === convId ? { ...c, messages: [...c.messages, deploymentMsg] } : c
     ));
 
-    // Progress through stages
-    for (let i = 0; i < deploymentStages.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+      // Call your API Gateway endpoint
+      const API_ENDPOINT = 'https://9xg8ogdbd7.execute-api.us-east-1.amazonaws.com/UAT';
 
-      const log = {
-        stage: deploymentStages[i].name,
-        message: getStageMessage(deploymentStages[i].name),
-        status: 'complete',
-        time: `${(Math.random() * 2 + 0.5).toFixed(1)}s`
-      };
+      const response = await fetch(`${API_ENDPOINT}/invoke-agent`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Add authentication headers if needed
+          // 'Authorization': `Bearer ${yourAuthToken}`
+        },
+        body: JSON.stringify({
+          prompt: prompt,
+          sessionId: deploymentMsg.id.toString()
+        })
+      });
 
+      if (!response.ok) {
+        throw new Error('Failed to invoke agent');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let stageIndex = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line);
+
+            // Handle different event types from Bedrock agent
+            if (data.type === 'stage_complete') {
+              const log = {
+                stage: data.stageName,
+                message: data.message,
+                status: 'complete',
+                time: data.executionTime
+              };
+
+              setConversations(prev => prev.map(c => {
+                if (c.id !== convId) return c;
+                return {
+                  ...c,
+                  messages: c.messages.map(m => {
+                    if (m.id === deploymentMsg.id && m.deployment) {
+                      return {
+                        ...m,
+                        deployment: {
+                          ...m.deployment,
+                          currentStage: stageIndex + 1,
+                          logs: [...m.deployment.logs, log],
+                          cost: data.cost || m.deployment.cost,
+                          sessionId: data.sessionId || m.deployment.sessionId
+                        }
+                      };
+                    }
+                    return m;
+                  })
+                };
+              }));
+
+              stageIndex++;
+            }
+
+            // Pause at approval stage
+            if (data.type === 'approval_required') {
+              setConversations(prev => prev.map(c => {
+                if (c.id !== convId) return c;
+                return {
+                  ...c,
+                  messages: c.messages.map(m => {
+                    if (m.id === deploymentMsg.id && m.deployment) {
+                      return {
+                        ...m,
+                        deployment: {
+                          ...m.deployment,
+                          status: 'awaiting-approval',
+                          cost: data.estimatedCost
+                        }
+                      };
+                    }
+                    return m;
+                  })
+                };
+              }));
+              break;
+            }
+          } catch (e) {
+            console.error('Error parsing chunk:', e);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error invoking agent:', error);
+
+      // Add error message to conversation
       setConversations(prev => prev.map(c => {
         if (c.id !== convId) return c;
         return {
           ...c,
           messages: c.messages.map(m => {
             if (m.id === deploymentMsg.id && m.deployment) {
+              const errorLog = {
+                stage: 'Error',
+                message: `Failed to connect to agent: ${error.message}`,
+                status: 'error',
+                time: '0s'
+              };
               return {
                 ...m,
                 deployment: {
                   ...m.deployment,
-                  currentStage: i + 1,
-                  logs: [...m.deployment.logs, log],
-                  cost: i === 1 ? (Math.random() * 200 + 50).toFixed(2) : m.deployment.cost
+                  logs: [...m.deployment.logs, errorLog],
+                  status: 'error'
                 }
               };
             }
@@ -140,26 +237,6 @@ export default function AgentDeploymentChat() {
           })
         };
       }));
-
-      // Pause at approval stage
-      if (i === 2) {
-        setConversations(prev => prev.map(c => {
-          if (c.id !== convId) return c;
-          return {
-            ...c,
-            messages: c.messages.map(m => {
-              if (m.id === deploymentMsg.id && m.deployment) {
-                return {
-                  ...m,
-                  deployment: { ...m.deployment, status: 'awaiting-approval' }
-                };
-              }
-              return m;
-            })
-          };
-        }));
-        break;
-      }
     }
   };
 
@@ -180,6 +257,9 @@ export default function AgentDeploymentChat() {
     setIsProcessing(true);
     const convId = currentConvId;
 
+    const msg = currentConv?.messages.find(m => m.id === msgId);
+    const sessionId = msg?.deployment?.sessionId;
+
     setConversations(prev => prev.map(c => {
       if (c.id !== convId) return c;
       return {
@@ -193,32 +273,96 @@ export default function AgentDeploymentChat() {
       };
     }));
 
-    const msg = currentConv?.messages.find(m => m.id === msgId);
-    const startStage = msg?.deployment?.currentStage || 3;
+    try {
+      const API_ENDPOINT = 'https://your-api-gateway-url.execute-api.us-east-1.amazonaws.com/prod';
 
-    for (let i = startStage; i < deploymentStages.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      const response = await fetch(`${API_ENDPOINT}/approve-deployment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: sessionId,
+          action: 'approve'
+        })
+      });
 
-      const log = {
-        stage: deploymentStages[i].name,
-        message: getStageMessage(deploymentStages[i].name),
-        status: 'complete',
-        time: `${(Math.random() * 2 + 0.5).toFixed(1)}s`
-      };
+      if (!response.ok) {
+        throw new Error('Failed to approve deployment');
+      }
 
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const startStage = msg?.deployment?.currentStage || 3;
+      let stageIndex = startStage;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line);
+
+            if (data.type === 'stage_complete') {
+              const log = {
+                stage: data.stageName,
+                message: data.message,
+                status: 'complete',
+                time: data.executionTime
+              };
+
+              setConversations(prev => prev.map(c => {
+                if (c.id !== convId) return c;
+                return {
+                  ...c,
+                  messages: c.messages.map(m => {
+                    if (m.id === msgId && m.deployment) {
+                      return {
+                        ...m,
+                        deployment: {
+                          ...m.deployment,
+                          currentStage: stageIndex + 1,
+                          logs: [...m.deployment.logs, log],
+                          status: data.isComplete ? 'complete' : 'in-progress'
+                        }
+                      };
+                    }
+                    return m;
+                  })
+                };
+              }));
+
+              stageIndex++;
+            }
+          } catch (e) {
+            console.error('Error parsing chunk:', e);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error approving deployment:', error);
       setConversations(prev => prev.map(c => {
         if (c.id !== convId) return c;
         return {
           ...c,
           messages: c.messages.map(m => {
             if (m.id === msgId && m.deployment) {
+              const errorLog = {
+                stage: 'Error',
+                message: `Failed to approve: ${error.message}`,
+                status: 'error',
+                time: '0s'
+              };
               return {
                 ...m,
                 deployment: {
                   ...m.deployment,
-                  currentStage: i + 1,
-                  logs: [...m.deployment.logs, log],
-                  status: i === deploymentStages.length - 1 ? 'complete' : 'in-progress'
+                  logs: [...m.deployment.logs, errorLog],
+                  status: 'error'
                 }
               };
             }
@@ -233,9 +377,10 @@ export default function AgentDeploymentChat() {
 
   const handleRetry = async (msgId) => {
     setIsProcessing(true);
+    const convId = currentConvId;
 
     setConversations(prev => prev.map(c => {
-      if (c.id !== currentConvId) return c;
+      if (c.id !== convId) return c;
       return {
         ...c,
         messages: c.messages.map(m => {
@@ -256,7 +401,7 @@ export default function AgentDeploymentChat() {
     }));
 
     const userMsg = currentConv?.messages.find(m => m.role === 'user');
-    await simulateAgentWorkflow(currentConvId, userMsg?.content || '');
+    await simulateAgentWorkflow(convId, userMsg?.content || '');
     setIsProcessing(false);
   };
 
@@ -342,7 +487,7 @@ export default function AgentDeploymentChat() {
               <div className="text-center max-w-2xl px-4">
                 <div className="text-7xl mb-8">🤖</div>
                 <h2 className="text-4xl font-semibold text-gray-800 mb-4">
-                  How can I help you today?
+                  How can I help you deploy today?
                 </h2>
                 <p className="text-gray-500 text-lg">
                   Describe your infrastructure needs and I'll guide you through the deployment process
