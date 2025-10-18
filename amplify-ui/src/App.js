@@ -107,138 +107,84 @@ export default function AgentDeploymentChat() {
     };
 
     setConversations(prev => prev.map(c =>
-      c.id === convId ? { ...c, messages: [...c.messages, deploymentMsg] } : c
-    ));
+          c.id === convId ? { ...c, messages: [...c.messages, deploymentMsg] } : c
+        ));
 
-    try {
-      // Call your API Gateway endpoint
-      const API_ENDPOINT = 'https://9xg8ogdbd7.execute-api.us-east-1.amazonaws.com/prod';
+        updateConversationTitle(convId, prompt); // Make sure this is still correct
+        const promptText = prompt; // Renamed to avoid confusion with parameter 'prompt'
 
-      const response = await fetch(`${API_ENDPOINT}/invoke-agent`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // Add authentication headers if needed
-          // 'Authorization': `Bearer ${yourAuthToken}`
-        },
-        body: JSON.stringify({
-          prompt: prompt,
-          sessionId: deploymentMsg.id.toString()
-        })
-      });
+        try {
+          const API_ENDPOINT = 'https://9xg8ogdbd7.execute-api.us-east-1.amazonaws.com/prod';
 
-      if (!response.ok) {
-        throw new Error('Failed to invoke agent');
-      }
+          const httpResponse = await fetch(`${API_ENDPOINT}/invoke-agent`, { // Renamed 'response' to 'httpResponse'
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              prompt: promptText,
+              sessionId: deploymentMsg.id.toString()
+            })
+          });
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let stageIndex = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n').filter(line => line.trim());
-
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line);
-
-            // Handle different event types from Bedrock agent
-            if (data.type === 'stage_complete') {
-              const log = {
-                stage: data.stageName,
-                message: data.message,
-                status: 'complete',
-                time: data.executionTime
-              };
-
-              setConversations(prev => prev.map(c => {
-                if (c.id !== convId) return c;
-                return {
-                  ...c,
-                  messages: c.messages.map(m => {
-                    if (m.id === deploymentMsg.id && m.deployment) {
-                      return {
-                        ...m,
-                        deployment: {
-                          ...m.deployment,
-                          currentStage: stageIndex + 1,
-                          logs: [...m.deployment.logs, log],
-                          cost: data.cost || m.deployment.cost,
-                          sessionId: data.sessionId || m.deployment.sessionId
-                        }
-                      };
-                    }
-                    return m;
-                  })
-                };
-              }));
-
-              stageIndex++;
-            }
-
-            // Pause at approval stage
-            if (data.type === 'approval_required') {
-              setConversations(prev => prev.map(c => {
-                if (c.id !== convId) return c;
-                return {
-                  ...c,
-                  messages: c.messages.map(m => {
-                    if (m.id === deploymentMsg.id && m.deployment) {
-                      return {
-                        ...m,
-                        deployment: {
-                          ...m.deployment,
-                          status: 'awaiting-approval',
-                          cost: data.estimatedCost
-                        }
-                      };
-                    }
-                    return m;
-                  })
-                };
-              }));
-              break;
-            }
-          } catch (e) {
-            console.error('Error parsing chunk:', e);
+          if (!httpResponse.ok) {
+            const errorBody = await httpResponse.text(); // Get error body as text
+            throw new Error(`Failed to invoke agent: ${httpResponse.status} - ${errorBody}`);
           }
-        }
-      }
-    } catch (error) {
-      console.error('Error invoking agent:', error);
 
-      // Add error message to conversation
-      setConversations(prev => prev.map(c => {
-        if (c.id !== convId) return c;
-        return {
-          ...c,
-          messages: c.messages.map(m => {
-            if (m.id === deploymentMsg.id && m.deployment) {
-              const errorLog = {
-                stage: 'Error',
-                message: `Failed to connect to agent: ${error.message}`,
-                status: 'error',
-                time: '0s'
-              };
-              return {
-                ...m,
-                deployment: {
-                  ...m.deployment,
-                  logs: [...m.deployment.logs, errorLog],
-                  status: 'error'
+          // --- CHANGE STARTS HERE ---
+          // Read the entire response body as text
+          const agentResponseText = await httpResponse.text();
+
+          // Now, update the UI with this text.
+          // You can decide if this text should replace the 'deploymentMsg' content
+          // or be added as a new message.
+          // For now, let's add it as a new assistant message.
+
+          const agentMessage = {
+            id: Date.now() + 1, // Ensure unique ID
+            role: 'assistant',
+            content: agentResponseText, // This is the plain text from your agent
+            timestamp: new Date().toLocaleString()
+          };
+
+          setConversations(prev => prev.map(c =>
+            c.id === convId ? { ...c, messages: [...c.messages, agentMessage] } : c
+          ));
+          // --- CHANGE ENDS HERE ---
+
+        } catch (error) {
+          console.error('Error invoking agent:', error);
+
+          // Add error message to conversation
+          setConversations(prev => prev.map(c => {
+            if (c.id !== convId) return c;
+            return {
+              ...c,
+              messages: c.messages.map(m => {
+                if (m.id === deploymentMsg.id && m.deployment) { // Assuming deploymentMsg is still relevant for potential subsequent stages
+                  const errorLog = {
+                    stage: 'Error',
+                    message: `Failed to connect to agent: ${error.message}`,
+                    status: 'error',
+                    time: '0s'
+                  };
+                  return {
+                    ...m,
+                    deployment: {
+                      ...m.deployment,
+                      logs: [...m.deployment.logs, errorLog],
+                      status: 'error'
+                    }
+                  };
                 }
-              };
-            }
-            return m;
-          })
-        };
-      }));
-    }
-  };
+                return m;
+              })
+            };
+          }));
+        }
+      };
+
 
   const getStageMessage = (stage) => {
     const messages = {
@@ -653,7 +599,7 @@ export default function AgentDeploymentChat() {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Message Deployment Agent..."
+                placeholder="eg: Deploy a VPC with two public subnets and EC2 Instance..."
                 rows="1"
                 className="flex-1 px-4 py-3 bg-transparent border-none outline-none resize-none max-h-48"
                 disabled={isProcessing}
